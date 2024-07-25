@@ -1,0 +1,631 @@
+#include <webots/robot.h>
+#include <webots/motor.h>
+#include <webots/keyboard.h>
+#include <webots/position_sensor.h>
+#include <webots/camera.h>
+#include <math.h>
+#include <webots/inertial_unit.h>
+#include <webots/lidar.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+
+#define TIME_STEP 16
+
+// PR2 constants
+#define MAX_WHEEL_SPEED 3.0        // maximum velocity for the wheels [rad / s]
+#define WHEELS_DISTANCE 0.4492     // distance between 2 caster wheels (the four wheels are located in square) [m]
+#define SUB_WHEELS_DISTANCE 0.098  // distance between 2 sub wheels of a caster wheel [m]
+#define WHEEL_RADIUS 0.08          // wheel radius
+
+#define TOLERANCE 0.05  // arbitrary value
+#define ALMOST_EQUAL(a, b) ((a < b + TOLERANCE) && (a > b - TOLERANCE))
+
+// helper constants to distinguish the motors
+enum { FLL_WHEEL, FLR_WHEEL, FRL_WHEEL, FRR_WHEEL, BLL_WHEEL, BLR_WHEEL, BRL_WHEEL, BRR_WHEEL };
+enum { FL_ROTATION, FR_ROTATION, BL_ROTATION, BR_ROTATION };
+enum { SHOULDER_ROLL, SHOULDER_LIFT, UPPER_ARM_ROLL, ELBOW_LIFT, WRIST_ROLL };
+enum { LEFT_FINGER, RIGHT_FINGER, LEFT_TIP, RIGHT_TIP };
+
+// PR2 motors and their sensors
+static WbDeviceTag wheel_motors[8];
+static WbDeviceTag wheel_sensors[8];
+static WbDeviceTag rotation_motors[4];
+static WbDeviceTag rotation_sensors[4];
+//static WbDeviceTag left_arm_motors[5];
+//static WbDeviceTag left_arm_sensors[5];
+//static WbDeviceTag right_arm_motors[5];
+//static WbDeviceTag right_arm_sensors[5];
+//static WbDeviceTag right_finger_motor;
+//static WbDeviceTag right_finger_sensor;
+//static WbDeviceTag left_finger_motor;
+//static WbDeviceTag left_finger_sensor;
+
+//PR2 Sensors
+static WbDeviceTag wide_stereo_l_stereo_camera_sensor;
+static WbDeviceTag wide_stereo_r_stereo_camera_sensor;
+static WbDeviceTag laser_tilt;
+static WbDeviceTag base_laser;
+static WbDeviceTag imu_sensor;
+
+// Simpler step function
+static void step() {
+  if (wb_robot_step(TIME_STEP) == -1) {
+    wb_robot_cleanup();
+    exit(EXIT_SUCCESS);
+  }
+}
+
+// Retrieve all the pointers to the PR2 devices
+static void initialize_devices() {
+  int i;
+  //Wheel Motors
+  wheel_motors[FLL_WHEEL] = wb_robot_get_device("fl_caster_l_wheel_joint");
+  wheel_motors[FLR_WHEEL] = wb_robot_get_device("fl_caster_r_wheel_joint");
+  wheel_motors[FRL_WHEEL] = wb_robot_get_device("fr_caster_l_wheel_joint");
+  wheel_motors[FRR_WHEEL] = wb_robot_get_device("fr_caster_r_wheel_joint");
+  wheel_motors[BLL_WHEEL] = wb_robot_get_device("bl_caster_l_wheel_joint");
+  wheel_motors[BLR_WHEEL] = wb_robot_get_device("bl_caster_r_wheel_joint");
+  wheel_motors[BRL_WHEEL] = wb_robot_get_device("br_caster_l_wheel_joint");
+  wheel_motors[BRR_WHEEL] = wb_robot_get_device("br_caster_r_wheel_joint");
+  for (i = FLL_WHEEL; i <= BRR_WHEEL; ++i)
+    wheel_sensors[i] = wb_motor_get_position_sensor(wheel_motors[i]);
+  
+  // Rotational Motors
+  rotation_motors[FL_ROTATION] = wb_robot_get_device("fl_caster_rotation_joint");
+  rotation_motors[FR_ROTATION] = wb_robot_get_device("fr_caster_rotation_joint");
+  rotation_motors[BL_ROTATION] = wb_robot_get_device("bl_caster_rotation_joint");
+  rotation_motors[BR_ROTATION] = wb_robot_get_device("br_caster_rotation_joint");
+  for (i = FL_ROTATION; i <= BR_ROTATION; ++i)
+    rotation_sensors[i] = wb_motor_get_position_sensor(rotation_motors[i]);
+  
+  
+  
+  // Sensors Initialization
+  wide_stereo_l_stereo_camera_sensor = wb_robot_get_device("wide_stereo_l_stereo_camera_sensor");
+  wide_stereo_r_stereo_camera_sensor = wb_robot_get_device("wide_stereo_r_stereo_camera_sensor");
+  laser_tilt = wb_robot_get_device("laser_tilt");
+  base_laser = wb_robot_get_device("base_laser"); 
+  imu_sensor = wb_robot_get_device("imu_sensor");
+ 
+    
+  // Left arm Motors  
+ /* left_arm_motors[SHOULDER_ROLL] = wb_robot_get_device("l_shoulder_pan_joint");
+  left_arm_motors[SHOULDER_LIFT] = wb_robot_get_device("l_shoulder_lift_joint");
+  left_arm_motors[UPPER_ARM_ROLL] = wb_robot_get_device("l_upper_arm_roll_joint");
+  left_arm_motors[ELBOW_LIFT] = wb_robot_get_device("l_elbow_flex_joint");
+  left_arm_motors[WRIST_ROLL] = wb_robot_get_device("l_wrist_roll_joint");
+  for (i = SHOULDER_ROLL; i <= WRIST_ROLL; ++i)
+    left_arm_sensors[i] = wb_motor_get_position_sensor(left_arm_motors[i]);*/
+  
+ 
+  
+
+  // Right Arm Motors
+ /* right_arm_motors[SHOULDER_ROLL] = wb_robot_get_device("r_shoulder_pan_joint");
+  right_arm_motors[SHOULDER_LIFT] = wb_robot_get_device("r_shoulder_lift_joint");
+  right_arm_motors[UPPER_ARM_ROLL] = wb_robot_get_device("r_upper_arm_roll_joint");
+  right_arm_motors[ELBOW_LIFT] = wb_robot_get_device("r_elbow_flex_joint");
+  right_arm_motors[WRIST_ROLL] = wb_robot_get_device("r_wrist_roll_joint");
+  for (i = SHOULDER_ROLL; i <= WRIST_ROLL; ++i)
+    right_arm_sensors[i] = wb_motor_get_position_sensor(right_arm_motors[i]);
+  
+  // Left Finger Motors
+  left_finger_motor = wb_robot_get_device("l_finger_gripper_motor::l_finger");
+  left_finger_sensor = wb_motor_get_position_sensor(left_finger_motor);
+  
+  // Right Finger Motors
+  right_finger_motor = wb_robot_get_device("r_finger_gripper_motor::l_finger");
+  right_finger_sensor = wb_motor_get_position_sensor(right_finger_motor);*/
+  
+  //Left Finger Sensors
+  /*left_finger_contact_sensors[LEFT_FINGER] = wb_robot_get_device("l_gripper_l_finger_tip_contact_sensor");
+  left_finger_contact_sensors[RIGHT_FINGER] = wb_robot_get_device("l_gripper_r_finger_tip_contact_sensor");
+  // Right FInger Sensors
+  right_finger_contact_sensors[LEFT_FINGER] = wb_robot_get_device("r_gripper_l_finger_tip_contact_sensor");
+  right_finger_contact_sensors[RIGHT_FINGER] = wb_robot_get_device("r_gripper_r_finger_tip_contact_sensor");
+*/
+  /*head_tilt_motor = wb_robot_get_device("head_tilt_joint");
+  torso_motor = wb_robot_get_device("torso_lift_joint");
+  torso_sensor = wb_robot_get_device("torso_lift_joint_sensor");*/
+    }
+    
+// enable the robot devices
+static void enable_devices() {
+  int i = 0;
+  for (i = 0; i < 8; ++i) {
+    wb_position_sensor_enable(wheel_sensors[i], TIME_STEP);
+    // init the motors for speed control
+    wb_motor_set_position(wheel_motors[i], INFINITY);
+    wb_motor_set_velocity(wheel_motors[i], 0.0);
+  }
+
+  for (i = 0; i < 4; ++i) 
+    wb_position_sensor_enable(rotation_sensors[i], TIME_STEP);
+    }
+    
+    /*for (i = 0; i < 2; ++i) {
+    wb_touch_sensor_enable(left_finger_contact_sensors[i], TIME_STEP);
+    wb_touch_sensor_enable(right_finger_contact_sensors[i], TIME_STEP);
+  }
+  
+
+  for (i = 0; i < 4; ++i) {
+    wb_position_sensor_enable(left_finger_sensor, TIME_STEP);
+    wb_position_sensor_enable(right_finger_sensor, TIME_STEP);
+  }
+
+  for (i = 0; i < 5; ++i) {
+    wb_position_sensor_enable(left_arm_sensors[i], TIME_STEP);
+    wb_position_sensor_enable(right_arm_sensors[i], TIME_STEP);
+  }*/
+    
+// set the speeds of the robot wheels
+static void set_wheels_speeds(double fll, double flr, double frl, double frr, double bll, double blr, double brl, double brr) {
+  wb_motor_set_velocity(wheel_motors[FLL_WHEEL], fll);
+  wb_motor_set_velocity(wheel_motors[FLR_WHEEL], flr);
+  wb_motor_set_velocity(wheel_motors[FRL_WHEEL], frl);
+  wb_motor_set_velocity(wheel_motors[FRR_WHEEL], frr);
+  wb_motor_set_velocity(wheel_motors[BLL_WHEEL], bll);
+  wb_motor_set_velocity(wheel_motors[BLR_WHEEL], blr);
+  wb_motor_set_velocity(wheel_motors[BRL_WHEEL], brl);
+  wb_motor_set_velocity(wheel_motors[BRR_WHEEL], brr);
+}
+
+// set the speed of the left arm base
+//static void set_left_arm_base
+
+
+static void set_wheels_speed(double speed) {
+  set_wheels_speeds(speed, speed, speed, speed, speed, speed, speed, speed);
+}
+
+static void stop_wheels() {
+  set_wheels_speeds(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+}
+
+// enable/disable the torques on the wheels motors
+static void enable_passive_wheels(bool enable) {
+  static double torques[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  int i;
+  if (enable) {
+    for (i = 0; i < 8; ++i) {
+      torques[i] = wb_motor_get_available_torque(wheel_motors[i]);
+      wb_motor_set_available_torque(wheel_motors[i], 0.0);
+    }
+  } else {
+    for (i = 0; i < 8; ++i)
+      wb_motor_set_available_torque(wheel_motors[i], torques[i]);
+  }
+}
+
+// Set the rotation wheels angles.
+// If wait_on_feedback is true, the function is left when the rotational motors have reached their target positions.
+static void set_rotation_wheels_angles(double fl, double fr, double bl, double br, bool wait_on_feedback) {
+  if (wait_on_feedback) {
+    stop_wheels();
+    enable_passive_wheels(true);
+  }
+
+  wb_motor_set_position(rotation_motors[FL_ROTATION], fl);
+  wb_motor_set_position(rotation_motors[FR_ROTATION], fr);
+  wb_motor_set_position(rotation_motors[BL_ROTATION], bl);
+  wb_motor_set_position(rotation_motors[BR_ROTATION], br);
+
+  if (wait_on_feedback) {
+    const double target[4] = {fl, fr, bl, br};
+
+    while (true) {
+      bool all_reached = true;
+      int i;
+      for (i = 0; i < 4; ++i) {
+        double current_position = wb_position_sensor_get_value(rotation_sensors[i]);
+        if (fabs(current_position - target[i]) > 0.05) {
+          all_reached = false;
+          break;
+        }
+      }
+
+      if (all_reached)
+        break;
+      else
+        step();
+    }
+
+    enable_passive_wheels(false);
+  }
+}
+
+// High level function to rotate the robot around itself of a given angle [rad]
+// Note: the angle can be negative
+// Rotate the robot continuously with a given speed
+static void rotate_continuously(double speed) {
+  set_rotation_wheels_angles(3.0 * M_PI_4, M_PI_4, -3.0 * M_PI_4, -M_PI_4, false);
+  set_wheels_speed(speed);
+}
+
+// Stop the robot's rotation
+static void stop_rotation() {
+  set_rotation_wheels_angles(0.0, 0.0, 0.0, 0.0, true);
+  stop_wheels();
+}
+
+
+
+int main(int argc, char **argv) {
+  wb_robot_init();
+  
+
+  initialize_devices();
+  wb_keyboard_enable(TIME_STEP);
+  // Sensors and Cameras Initialization
+  wb_camera_enable(wide_stereo_l_stereo_camera_sensor, TIME_STEP);
+  wb_camera_enable(wide_stereo_r_stereo_camera_sensor, TIME_STEP);
+  //wb_lidar_enable(laser_tilt, TIME_STEP);
+  //wb_lidar_enable_point_cloud(laser_tilt);
+  wb_lidar_enable(base_laser, TIME_STEP);
+  wb_lidar_enable_point_cloud(base_laser);
+  //wb_inertial_unit_enable(imu_sensor_TIME_STEP);
+  enable_devices();
+  
+   // Left arm
+  WbDeviceTag motors[6];
+  motors[0] = wb_robot_get_device("l_shoulder_pan_joint");
+  motors[1] = wb_robot_get_device("l_shoulder_lift_joint");
+  motors[2] = wb_robot_get_device("l_upper_arm_roll_joint");
+  motors[3] = wb_robot_get_device("l_elbow_flex_joint");
+  motors[4] = wb_robot_get_device("l_wrist_roll_joint");
+  motors[5] = wb_robot_get_device("l_wrist_flex_joint");
+  
+  // Right Arm
+  WbDeviceTag motors_right[6];
+  motors_right[0] = wb_robot_get_device("r_shoulder_pan_joint");
+  motors_right[1] = wb_robot_get_device("r_shoulder_lift_joint");
+  motors_right[2] = wb_robot_get_device("r_upper_arm_roll_joint");
+  motors_right[3] = wb_robot_get_device("r_elbow_flex_joint");
+  motors_right[4] = wb_robot_get_device("r_wrist_roll_joint");
+  motors_right[5] = wb_robot_get_device("r_wrist_flex_joint");
+  
+  for (int i = 0; i < 6; ++i) {
+    wb_motor_set_position(motors[i], 0.0);
+    wb_motor_set_velocity(motors[i], 12.5);
+  }
+  
+  for (int i = 0; i < 6; ++i) {
+  wb_motor_set_position(motors_right[i], 0.0);
+  wb_motor_set_velocity(motors_right[i], 12.5);
+  }
+  
+  //set_initial_position();
+  stop_rotation(MAX_WHEEL_SPEED);
+  set_wheels_speed(MAX_WHEEL_SPEED);
+  //stop_rotation(MAX_WHEEL_SPEED);
+  
+  // main loop
+  while (wb_robot_step(TIME_STEP) != -1) {
+    int key = wb_keyboard_get_key();
+    const float *ranges = wb_lidar_get_range_image(base_laser);
+     printf("Distance: %f\n", ranges[0]);
+    // Left Arm
+    static bool l_shoulder_pan_joint_1 = false;
+    static bool l_shoulder_pan_joint_1_back = false;
+    static bool l_shoulder_lift_joint_up = false;
+    static bool l_shoulder_lift_joint_down = false;
+    static bool l_upper_arm_roll_joint_up = false;
+    static bool l_upper_arm_roll_joint_down = false;
+    static bool l_elbow_flex_joint_twistleft = false;
+    static bool l_elbow_flex_joint_twistright = false;
+    static bool l_wrist_roll_joint_lookleft = false;
+    static bool l_wrist_roll_joint_lookright = false;
+    static bool l_wrist_flex_joint_up = false;
+    static bool l_wrist_flex_joint_down = false;
+    //static bool is_moving_joint_6_griptwistright = false;
+    //static bool is_moving_joint_6_griptwistleft = false;
+    
+    // Right Arm
+    static bool r_shoulder_pan_joint_1 = false;
+    static bool r_shoulder_pan_joint_1_back = false;
+    static bool r_shoulder_lift_joint_up = false;
+    static bool r_shoulder_lift_joint_down = false;
+    static bool r_upper_arm_roll_joint_up = false;
+    static bool r_upper_arm_roll_joint_down = false;
+    static bool r_elbow_flex_joint_twistleft = false;
+    static bool r_elbow_flex_joint_twistright = false;
+    static bool r_wrist_roll_joint_lookleft = false;
+    static bool r_wrist_roll_joint_lookright = false;
+    static bool r_wrist_flex_joint_up = false;
+    static bool r_wrist_flex_joint_down = false;
+    //static bool is_moving_joint_6_griptwistright = false;
+    //static bool is_moving_joint_6_griptwistleft = false;
+    if (key == 'S') {
+    stop_rotation(MAX_WHEEL_SPEED);
+    set_wheels_speed(-MAX_WHEEL_SPEED);
+    }
+    else if (key == 'A') {
+    rotate_continuously(MAX_WHEEL_SPEED);
+    }
+    else if (key == 'D') {
+     rotate_continuously(-MAX_WHEEL_SPEED);
+    }
+    else if (key == 'W') {
+    stop_rotation(MAX_WHEEL_SPEED);
+    set_wheels_speed(MAX_WHEEL_SPEED);
+    }
+    /*else if (key == 'Q') {
+    l_shoulder_pan_joint_1 = true;
+    l_shoulder_pan_joint_1_back = false;
+    
+      
+      if (l_shoulder_pan_joint_1) {
+      double current_position = wb_motor_get_target_position(motors[0]);
+      wb_motor_set_position(motors[0], current_position - 0.01);
+    } else if (l_shoulder_pan_joint_1_back) {
+      double current_position = wb_motor_get_target_position(motors[0]);
+      wb_motor_set_position(motors[0], current_position + 0.01);
+    }
+    }*/
+    else {
+    stop_wheels();// Stop movement of the main wheels
+    stop_rotation(); // Srop movement of rotational wheels
+    }
+    // Left Rotational Amr Control
+    if (key == 'Q') {
+    l_shoulder_pan_joint_1 = true;
+    l_shoulder_pan_joint_1_back = false;
+    } else if (key == 'E') {
+      l_shoulder_pan_joint_1 = false;
+      l_shoulder_pan_joint_1_back = true;
+     } else {
+       l_shoulder_pan_joint_1 = false;
+       l_shoulder_pan_joint_1_back = false;
+       }
+     if (l_shoulder_pan_joint_1) {
+      double current_position = wb_motor_get_target_position(motors[0]);
+      wb_motor_set_position(motors[0], current_position - 0.01);
+    } else if (l_shoulder_pan_joint_1_back) {
+      double current_position = wb_motor_get_target_position(motors[0]);
+      wb_motor_set_position(motors[0], current_position + 0.01);
+    }
+    
+    // Left Shoulder Arm Control
+    if (key == 'Z') {
+      l_shoulder_lift_joint_up = true;
+      l_shoulder_lift_joint_down = false;
+     } else if (key == 'X') {
+       l_shoulder_lift_joint_up = false;
+       l_shoulder_lift_joint_down = true;
+      } else {
+        l_shoulder_lift_joint_up = false;
+        l_shoulder_lift_joint_down = false;
+        }
+        
+       if (l_shoulder_lift_joint_up) {
+         double current_position = wb_motor_get_target_position(motors[1]);
+         wb_motor_set_position(motors[1], current_position - 0.01);
+       } else if (l_shoulder_lift_joint_down) {
+         double current_position = wb_motor_get_target_position(motors[1]);
+         wb_motor_set_position(motors[1], current_position + 0.01);
+         }
+         
+       // Left Upper Arm Roll Control
+       if (key == 'R') {
+          l_upper_arm_roll_joint_up = true;
+          l_upper_arm_roll_joint_down = false;
+       } else if (key == 'T') {
+         l_upper_arm_roll_joint_up = false;
+         l_upper_arm_roll_joint_down = true;
+       } else {
+         l_upper_arm_roll_joint_up = false;
+         l_upper_arm_roll_joint_down = false;
+         }
+        
+       if (l_upper_arm_roll_joint_up) {
+         double current_position = wb_motor_get_target_position(motors[2]);
+         wb_motor_set_position(motors[2], current_position - 0.01);
+       } else if (l_upper_arm_roll_joint_down) {
+         double current_position = wb_motor_get_target_position(motors[2]);
+         wb_motor_set_position(motors[2], current_position + 0.01);
+         }
+         
+         
+       // Left Elbow Flex Arm Control
+       if (key == 'F') {
+          l_elbow_flex_joint_twistleft = true;
+          l_elbow_flex_joint_twistright = false;
+       } else if (key == 'G') {
+         l_elbow_flex_joint_twistleft = false;
+         l_elbow_flex_joint_twistright = true;
+       } else {
+         l_elbow_flex_joint_twistleft = false;
+         l_elbow_flex_joint_twistright = false;
+         }
+        
+       if (l_elbow_flex_joint_twistleft) {
+         double current_position = wb_motor_get_target_position(motors[3]);
+         wb_motor_set_position(motors[3], current_position - 0.01);
+       } else if (l_elbow_flex_joint_twistright) {
+         double current_position = wb_motor_get_target_position(motors[3]);
+         wb_motor_set_position(motors[3], current_position + 0.01);
+         }
+         
+         
+        // Left Wrist Roll Arm Control
+       if (key == 'C') {
+          l_wrist_roll_joint_lookleft = true;
+          l_wrist_roll_joint_lookright = false;
+       } else if (key == 'V') {
+         l_wrist_roll_joint_lookleft = false;
+         l_wrist_roll_joint_lookright = true;
+       } else {
+         l_wrist_roll_joint_lookleft = false;
+         l_wrist_roll_joint_lookright = false;
+         }
+        
+       if (l_wrist_roll_joint_lookleft) {
+         double current_position = wb_motor_get_target_position(motors[4]);
+         wb_motor_set_position(motors[4], current_position - 0.01);
+       } else if (l_wrist_roll_joint_lookright) {
+         double current_position = wb_motor_get_target_position(motors[4]);
+         wb_motor_set_position(motors[4], current_position + 0.01);
+         }
+        
+        
+        // Left Wrist Roll Arm Control
+       if (key == 'Y') {
+          l_wrist_flex_joint_up = true;
+          l_wrist_flex_joint_down = false;
+       } else if (key == 'U') {
+         l_wrist_flex_joint_up = false;
+         l_wrist_flex_joint_down = true;
+       } else {
+         l_wrist_flex_joint_up = false;
+         l_wrist_flex_joint_down = false;
+         }
+        
+       if (l_wrist_flex_joint_up) {
+         double current_position = wb_motor_get_target_position(motors[5]);
+         wb_motor_set_position(motors[5], current_position - 0.01);
+       } else if (l_wrist_flex_joint_down) {
+         double current_position = wb_motor_get_target_position(motors[5]);
+         wb_motor_set_position(motors[5], current_position + 0.01);
+         }
+         
+    // Right Rotational Arm Control    
+    if (key == 'I') {
+    r_shoulder_pan_joint_1 = true;
+    r_shoulder_pan_joint_1_back = false;
+    } else if (key == 'O') {
+      r_shoulder_pan_joint_1 = false;
+      r_shoulder_pan_joint_1_back = true;
+     } else {
+       r_shoulder_pan_joint_1 = false;
+       r_shoulder_pan_joint_1_back = false;
+       }
+     if (r_shoulder_pan_joint_1) {
+      double current_position = wb_motor_get_target_position(motors_right[0]);
+      wb_motor_set_position(motors_right[0], current_position - 0.01);
+    } else if (r_shoulder_pan_joint_1_back) {
+      double current_position = wb_motor_get_target_position(motors_right[0]);
+      wb_motor_set_position(motors_right[0], current_position + 0.01);
+    }
+    
+    
+    // Right Shoulder Arm Control
+    if (key == 'H') {
+      r_shoulder_lift_joint_up = true;
+      r_shoulder_lift_joint_down = false;
+     } else if (key == 'J') {
+       r_shoulder_lift_joint_up = false;
+       r_shoulder_lift_joint_down = true;
+      } else {
+        r_shoulder_lift_joint_up = false;
+        r_shoulder_lift_joint_down = false;
+        }
+        
+       if (r_shoulder_lift_joint_up) {
+         double current_position = wb_motor_get_target_position(motors_right[1]);
+         wb_motor_set_position(motors_right[1], current_position - 0.01);
+       } else if (r_shoulder_lift_joint_down) {
+         double current_position = wb_motor_get_target_position(motors_right[1]);
+         wb_motor_set_position(motors_right[1], current_position + 0.01);
+         }
+         
+       // Right Upper Arm Roll Control
+       if (key == 'B') {
+          r_upper_arm_roll_joint_up = true;
+          r_upper_arm_roll_joint_down = false;
+       } else if (key == 'N') {
+         r_upper_arm_roll_joint_up = false;
+         r_upper_arm_roll_joint_down = true;
+       } else {
+         r_upper_arm_roll_joint_up = false;
+         r_upper_arm_roll_joint_down = false;
+         }
+        
+       if (r_upper_arm_roll_joint_up) {
+         double current_position = wb_motor_get_target_position(motors_right[2]);
+         wb_motor_set_position(motors_right[2], current_position - 0.01);
+       } else if (r_upper_arm_roll_joint_down) {
+         double current_position = wb_motor_get_target_position(motors_right[2]);
+         wb_motor_set_position(motors_right[2], current_position + 0.01);
+         }
+         
+         
+       // Right Elbow Flex Arm Control
+       if (key == 'P') {
+          r_elbow_flex_joint_twistleft = true;
+          r_elbow_flex_joint_twistright = false;
+       } else if (key == '[') {
+         r_elbow_flex_joint_twistleft = false;
+         r_elbow_flex_joint_twistright = true;
+       } else {
+         r_elbow_flex_joint_twistleft = false;
+         r_elbow_flex_joint_twistright = false;
+         }
+        
+       if (r_elbow_flex_joint_twistleft) {
+         double current_position = wb_motor_get_target_position(motors_right[3]);
+         wb_motor_set_position(motors_right[3], current_position - 0.01);
+       } else if (r_elbow_flex_joint_twistright) {
+         double current_position = wb_motor_get_target_position(motors_right[3]);
+         wb_motor_set_position(motors_right[3], current_position + 0.01);
+         }
+         
+         
+        // Right Wrist Roll Arm Control
+       if (key == 'K') {
+          r_wrist_roll_joint_lookleft = true;
+          r_wrist_roll_joint_lookright = false;
+       } else if (key == 'L') {
+         r_wrist_roll_joint_lookleft = false;
+         r_wrist_roll_joint_lookright = true;
+       } else {
+         r_wrist_roll_joint_lookleft = false;
+         r_wrist_roll_joint_lookright = false;
+         }
+        
+       if (r_wrist_roll_joint_lookleft) {
+         double current_position = wb_motor_get_target_position(motors_right[4]);
+         wb_motor_set_position(motors_right[4], current_position - 0.01);
+       } else if (r_wrist_roll_joint_lookright) {
+         double current_position = wb_motor_get_target_position(motors_right[4]);
+         wb_motor_set_position(motors_right[4], current_position + 0.01);
+         }
+        
+        
+        // Left Wrist Roll Arm Control
+       if (key == 'M') {
+          r_wrist_flex_joint_up = true;
+          r_wrist_flex_joint_down = false;
+       } else if (key == ',') {
+         r_wrist_flex_joint_up = false;
+         r_wrist_flex_joint_down = true;
+       } else {
+         r_wrist_flex_joint_up = false;
+         r_wrist_flex_joint_down = false;
+         }
+        
+       if (r_wrist_flex_joint_up) {
+         double current_position = wb_motor_get_target_position(motors_right[5]);
+         wb_motor_set_position(motors_right[5], current_position - 0.01);
+       } else if (r_wrist_flex_joint_down) {
+         double current_position = wb_motor_get_target_position(motors_right[5]);
+         wb_motor_set_position(motors_right[5], current_position + 0.01);
+         }
+        
+            
+    
+
+    }
+    
+     wb_robot_cleanup();
+
+  return EXIT_SUCCESS;
+}
+
+
+
+
+  
+  
+
